@@ -7,15 +7,12 @@ class GameMap:
     def __init__(self, width: int, height: int):
         self.width, self.height = width, height
 
-        # Fill a box of (width x height) with floor tiles
+        # Fill a box of (width x height) with wall tiles
         self.tiles = np.full(
             (width, height),
-            fill_value=tile_types.floor,
+            fill_value=tile_types.wall,
             order="F"
         )
-
-        # place walls between (30 - 33(x), 22(y))
-        self.tiles[30:33, 22] = tile_types.wall
 
     def in_bounds(self, x: int, y: int) -> bool:
         """
