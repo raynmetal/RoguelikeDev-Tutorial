@@ -68,10 +68,16 @@ def place_entities(
         if not any(entity.x == x and entity.y == y for entity in dungeon.entities):
             item_chance = random.random()
 
+            # 70% chance of a health potion
             if item_chance < 0.7:
                 entity_factories.health_potion.spawn(dungeon, x, y)
+            # b/w 70% - 80%, or in other words, 10% chance of fireball scroll
+            elif item_chance < 0.8:
+                entity_factories.fireball_scroll.spawn(dungeon, x, y)
+            # b/w 80% - 90%, or in other words, 10% chance of confusion scroll
             elif item_chance < 0.9:
                 entity_factories.confusion_scroll.spawn(dungeon, x, y)
+            # b/w 90% - 100%, or in other words, 10% chance of lightning scroll
             else:
                 entity_factories.lightning_scroll.spawn(dungeon, x, y)
 
