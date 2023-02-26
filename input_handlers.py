@@ -46,6 +46,11 @@ WAIT_KEYS = {
     tcod.event.K_CLEAR,
 }
 
+CONFIRM_KEYS = {
+    tcod.event.K_RETURN,
+    tcod.event.K_KP_ENTER,
+}
+
 class EventHandler(tcod.event.EventDispatch[Action]):
     def __init__(self, engine: Engine):
         self.engine = engine
@@ -82,111 +87,6 @@ class EventHandler(tcod.event.EventDispatch[Action]):
     
     def on_render(self, console: tcod.Console) -> None:
         self.engine.render(console)
-
-class MainGameEventHandler(EventHandler):
-    def ev_keydown(self, event: tcod.event.KeyDown) -> Optional[Action]:
-        action: Optional[Action] = None
-
-        key = event.sym 
-
-        player = self.engine.player
-        if key in MOVE_KEYS:
-            dx, dy = MOVE_KEYS[key]
-            action = BumpAction(player, dx, dy)
-
-        elif key in WAIT_KEYS:
-            action = WaitAction(player)
-
-        elif key == tcod.event.K_v:
-            self.engine.event_handler = HistoryViewer(self.engine)
-        
-        elif key == tcod.event.K_g:
-            action = PickupAction(player)
-        
-        # Switch to the appropriate event handler 
-        # when player wants to use or drop an item
-        elif key == tcod.event.K_i:
-            self.engine.event_handler = InventoryActivateHandler(self.engine)
-        elif key == tcod.event.K_d:
-            self.engine.event_handler = InventoryDropHandler(self.engine)
-
-        elif key == tcod.event.K_ESCAPE:
-            raise SystemExit()
-
-        # No valid key was pressed
-        return action
-
-class GameOverEventHandler(EventHandler):
-
-    def ev_keydown(self, event: tcod.event.KeyDown) -> Optional[Action]:
-        if event.sym == tcod.event.K_ESCAPE:
-            raise SystemExit()
-
-CURSOR_Y_KEYS = {
-    tcod.event.K_UP: -1,
-    tcod.event.K_DOWN: 1,
-    tcod.event.K_PAGEUP: -10,
-    tcod.event.K_PAGEDOWN: 10,
-}
-
-class HistoryViewer(EventHandler):
-    """
-    Print the history on a larger window which can be navigated.
-    """
-
-    def __init__(self, engine: Engine):
-        super().__init__(engine)
-        self.log_length = len(engine.message_log.messages)
-        self.cursor = self.log_length - 1
-
-    def on_render(self, console: tcod.Console) -> None:
-        super().on_render(console) # Draw the main state as the background
-
-        log_console = tcod.Console(console.width -6, console.height - 6)
-
-        # Draw a frame with a custom banner title.
-        log_console.draw_frame(0, 0, log_console.width, log_console.height)
-
-        # Render the message log using the cursor parameter
-        self.engine.message_log.render_messages(
-            log_console,
-            1,
-            1,
-            log_console.width - 2,
-            log_console.height - 2,
-            self.engine.message_log.messages[:self.cursor + 1],
-        )
-
-        log_console.blit(console, 3, 3)
-
-    def ev_keydown(self, event: tcod.event.KeyDown) -> None:
-        # Fancy conditional movement to make it feel right.
-        if event.sym in CURSOR_Y_KEYS:
-            adjust = CURSOR_Y_KEYS[event.sym]
-
-            # Only move from the top to the bottom when you're on
-            # the edge.
-            if adjust < 0 and self.cursor == 0:
-                self.cursor = self.log_length
-            
-            # Same with bottom to top movement
-            elif adjust > 0 and self.cursor == self.log_length - 1:
-                self.cursor = 0
-
-            # Otherwise move while staying clamped to the bounds of the history log
-            else:
-                self.cursor = max(0, min(self.cursor + adjust, self.log_length - 1))
-        # Home takes us to the top
-        elif event.sym == tcod.event.K_HOME:
-            self.cursor = 0
-
-        # End takes us to the bottom
-        elif event.sym == tcod.event.K_END:
-            self.cursor = self.log_length - 1
-        
-        # Anything else takes us back to the regular game
-        else:
-            self.engine.event_handler = MainGameEventHandler(self.engine)
 
 class AskUserEventHandler(EventHandler):
     """
@@ -328,3 +228,188 @@ class InventoryDropHandler(InventoryEventHandler):
         Drop this item.
         """
         return actions.DropItem(self.engine.player, item)
+
+class SelectIndexHandler(AskUserEventHandler):
+    """
+    Handles asking the user for an index on the map
+    """
+
+    def __init__(self, engine: Engine):
+        """
+        Sets the cursor to the player when this handler is constructed
+        """
+        super().__init__(engine)
+        player = self.engine.player
+        engine.mouse_location = player.x, player.y
+
+    def on_render(self, console: tcod.Console) -> None:
+        """
+        Highlight the tile under the cursor.
+        """
+        super().on_render(console)
+        x, y = self.engine.mouse_location
+        console.tiles_rgb["bg"][x, y] = color.white
+        console.tiles_rgb["fg"][x, y] = color.black
+
+    def ev_keydown(self, event: tcod.event.KeyDown) -> Optional[Action]:
+        """
+        Check for key movement or confirmation keys
+        """
+        key = event.sym
+        if key in MOVE_KEYS:
+            modifier = 1
+            if event.mod & (tcod.event.KMOD_LSHIFT | tcod.event.KMOD_RSHIFT):
+                modifier *= 5
+            if event.mod & (tcod.event.KMOD_LCTRL | tcod.event.KMOD_RCTRL):
+                modifier *= 10
+            if event.mod & (tcod.event.KMOD_LALT | tcod.event.KMOD_RALT):
+                modifier *= 20
+
+            x, y = self.engine.mouse_location
+            dx, dy = MOVE_KEYS[key]
+            x += dx * modifier
+            y += dy * modifier
+
+            # Clamp the cursor index to the map size.
+            x = max(0, min(x, self.engine.game_map.width - 1))
+            y = max(0, min(y, self.engine.game_map.height - 1))
+
+            self.engine.mouse_location = x, y
+            return None
+        elif key in CONFIRM_KEYS:
+            return self.on_index_selected(*self.engine.mouse_location)
+        return super().ev_keydown(event)
+
+    def ev_mousebuttondown(self, event: tcod.event.MouseButtonDown) -> Optional[Action]:
+        """
+        Left click confirms a selection
+        """
+        if self.engine.game_map.in_bounds(*event.tile):
+            if event.button == 1:
+                return self.on_index_selected(*event.tile)
+        return super().ev_mousebuttondown(event)
+
+    def on_index_selected(self, x: int, y: int) -> Optional[Action]:
+        """
+        Called when an index is selected.
+        """
+        raise NotImplementedError()
+
+class LookHandler(SelectIndexHandler):
+    """
+    Lets the player look around using the keyboard.
+    """
+
+    def on_index_selected(self, x: int, y: int) -> None:
+        """
+        Return to main handler
+        """
+        self.engine.event_handler = MainGameEventHandler(self.engine)
+
+
+class MainGameEventHandler(EventHandler):
+    def ev_keydown(self, event: tcod.event.KeyDown) -> Optional[Action]:
+        action: Optional[Action] = None
+
+        key = event.sym 
+
+        player = self.engine.player
+        if key in MOVE_KEYS:
+            dx, dy = MOVE_KEYS[key]
+            action = BumpAction(player, dx, dy)
+
+        elif key in WAIT_KEYS:
+            action = WaitAction(player)
+
+        elif key == tcod.event.K_v:
+            self.engine.event_handler = HistoryViewer(self.engine)
+        
+        elif key == tcod.event.K_g:
+            action = PickupAction(player)
+        
+        # Switch to the appropriate event handler 
+        # when player wants to use or drop an item
+        elif key == tcod.event.K_i:
+            self.engine.event_handler = InventoryActivateHandler(self.engine)
+        elif key == tcod.event.K_d:
+            self.engine.event_handler = InventoryDropHandler(self.engine)
+        elif key == tcod.event.K_SLASH:
+            self.engine.event_handler = LookHandler(self.engine)
+
+        elif key == tcod.event.K_ESCAPE:
+            raise SystemExit()
+
+        # No valid key was pressed
+        return action
+
+class GameOverEventHandler(EventHandler):
+
+    def ev_keydown(self, event: tcod.event.KeyDown) -> Optional[Action]:
+        if event.sym == tcod.event.K_ESCAPE:
+            raise SystemExit()
+
+CURSOR_Y_KEYS = {
+    tcod.event.K_UP: -1,
+    tcod.event.K_DOWN: 1,
+    tcod.event.K_PAGEUP: -10,
+    tcod.event.K_PAGEDOWN: 10,
+}
+
+class HistoryViewer(EventHandler):
+    """
+    Print the history on a larger window which can be navigated.
+    """
+
+    def __init__(self, engine: Engine):
+        super().__init__(engine)
+        self.log_length = len(engine.message_log.messages)
+        self.cursor = self.log_length - 1
+
+    def on_render(self, console: tcod.Console) -> None:
+        super().on_render(console) # Draw the main state as the background
+
+        log_console = tcod.Console(console.width -6, console.height - 6)
+
+        # Draw a frame with a custom banner title.
+        log_console.draw_frame(0, 0, log_console.width, log_console.height)
+
+        # Render the message log using the cursor parameter
+        self.engine.message_log.render_messages(
+            log_console,
+            1,
+            1,
+            log_console.width - 2,
+            log_console.height - 2,
+            self.engine.message_log.messages[:self.cursor + 1],
+        )
+
+        log_console.blit(console, 3, 3)
+
+    def ev_keydown(self, event: tcod.event.KeyDown) -> None:
+        # Fancy conditional movement to make it feel right.
+        if event.sym in CURSOR_Y_KEYS:
+            adjust = CURSOR_Y_KEYS[event.sym]
+
+            # Only move from the top to the bottom when you're on
+            # the edge.
+            if adjust < 0 and self.cursor == 0:
+                self.cursor = self.log_length
+            
+            # Same with bottom to top movement
+            elif adjust > 0 and self.cursor == self.log_length - 1:
+                self.cursor = 0
+
+            # Otherwise move while staying clamped to the bounds of the history log
+            else:
+                self.cursor = max(0, min(self.cursor + adjust, self.log_length - 1))
+        # Home takes us to the top
+        elif event.sym == tcod.event.K_HOME:
+            self.cursor = 0
+
+        # End takes us to the bottom
+        elif event.sym == tcod.event.K_END:
+            self.cursor = self.log_length - 1
+        
+        # Anything else takes us back to the regular game
+        else:
+            self.engine.event_handler = MainGameEventHandler(self.engine)
